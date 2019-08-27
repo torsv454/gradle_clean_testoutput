@@ -1,0 +1,98 @@
+import groovy.time.TimeCategory
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
+
+ext.testsResults = [] 
+
+allprojects { project ->
+
+    tasks.withType(Test) { testTask ->
+    
+      def outputCache = new LinkedList<String>()
+
+  testTask.beforeTest { TestDescriptor td -> outputCache.clear() }    // clear everything right before the test starts
+
+  testTask.onOutput { TestDescriptor td, TestOutputEvent toe ->       // when output is coming put it in the cache
+  	println("###########################################");
+    outputCache.add(toe.getMessage())
+    while (outputCache.size() > 1000) outputCache.remove() // if we have more than 1000 lines -> drop first
+  }
+
+  /** after test -> decide what to print */
+  testTask.afterTest { TestDescriptor td, TestResult tr ->
+    if (tr.resultType == TestResult.ResultType.FAILURE && outputCache.size() > 0) {
+        println()
+        println(" Output of ${td.className}.${td.name}:")
+        outputCache.each { print(" > $it") }
+    }
+  }
+    
+
+        testTask.testLogging { logging ->
+			events TestLogEvent.FAILED,
+                   TestLogEvent.SKIPPED,
+                   TestLogEvent.STANDARD_OUT,
+                   TestLogEvent.STANDARD_ERROR
+
+            exceptionFormat TestExceptionFormat.FULL
+            showExceptions true
+            showCauses true
+            showStackTraces true
+            // Disable standard streams, otherwise output is copied to stdout.
+            showStandardStreams false 
+        }
+		
+        ignoreFailures = true // Always try to run all tests for all modules
+        
+        
+
+        afterSuite { desc, result ->
+
+            if (desc.parent) return // Only summarize results for whole modules
+
+            String summary = "${result.resultType} ${testTask.project.name}:${testTask.name} " +
+                    "(" +
+                    "${result.testCount} tests, " +
+                    "${result.successfulTestCount} successes, " +
+                    "${result.failedTestCount} failures, " +
+                    "${result.skippedTestCount} skipped" +
+                    ") " +
+                    "in ${TimeCategory.minus(new Date(result.endTime), new Date(result.startTime))}" +
+                    "\n" +
+                    "        report: ${testTask.reports.html.entryPoint}"
+
+            // Add reports in `testsResults`, keep failed suites at the end
+            if (result.resultType == TestResult.ResultType.SUCCESS) {
+                rootProject.testsResults.add(0, summary)
+            } else {
+                rootProject.testsResults += summary
+            }
+        }
+    }
+}
+
+
+gradle.buildFinished {
+    def allResults = rootProject.ext.testsResults
+
+    if (!allResults.isEmpty()) {
+        printResults allResults
+    }
+}
+
+private static void printResults(allResults) {
+    def maxLength = allResults*.readLines().flatten().collect { it.length() }.max()
+
+    println "\n${"${"=" * maxLength}"}"
+    println "${" TEST SUMMARY "}"
+    println "${"${"=" * maxLength}"}"
+
+    println allResults.collect {
+        it.readLines().collect {
+            it + " " * (maxLength - it.length()) 
+        }.join("\n")
+    }.join("\n")
+
+    println "${"${"-" * maxLength}"}\n"
+}
+
